@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+if [ -x "$PROJECT_DIR/.runtime/node_modules/node/bin/node" ]; then
+  NODE_BIN=${MONITOR_NODE:-"$PROJECT_DIR/.runtime/node_modules/node/bin/node"}
+else
+  NODE_BIN=${MONITOR_NODE:-node}
+fi
+exec "$NODE_BIN" "$PROJECT_DIR/dist/src/cli.js" --root "$PROJECT_DIR" "$@"

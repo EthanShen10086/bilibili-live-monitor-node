@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$PROJECT_DIR"
+# Installs a project-local runtime; no changes to the system Node installation.
+npm install --prefix .runtime --cache .npm-cache --registry=https://registry.npmjs.org --no-audit --no-fund node@24.21.0
+PATH="$PROJECT_DIR/.runtime/node_modules/node/bin:$PATH"
+export PATH
+npm_config_devdir="$PROJECT_DIR/.node-gyp"
+export npm_config_devdir
+npm ci --cache .npm-cache --registry=https://registry.npmjs.org --no-audit --no-fund
+npm run build
+printf '%s\n' 'Ready. Configure .env, then run bin/monitor check-config --probe.'

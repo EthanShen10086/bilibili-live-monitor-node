@@ -1,0 +1,37 @@
+{
+  "name": "bilibili-live-ws",
+  "version": "7.0.0",
+  "description": "Bilibili Live Open Platform WebSocket client",
+  "type": "commonjs",
+  "main": "index.js",
+  "browser": "browser.js",
+  "scripts": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/simon300000/bilibili-live-ws.git"
+  },
+  "keywords": [
+    "bilibili",
+    "api",
+    "websocket",
+    "live",
+    "ws",
+    "open-platform"
+  ],
+  "author": "simon3000 <simon3000@163.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/simon300000/bilibili-live-ws/issues"
+  },
+  "homepage": "https://github.com/simon300000/bilibili-live-ws#readme",
+  "dependencies": {
+    "array-flat-polyfill": "^1.0.1",
+    "isomorphic-ws": "^5.0.0",
+    "ws": "^8.2.3"
+  },
+  "peerDependencies": {
+    "buffer": "^6.0.3",
+    "events": "^3.3.0",
+    "pako": "^2.0.4"
+  }
+}
