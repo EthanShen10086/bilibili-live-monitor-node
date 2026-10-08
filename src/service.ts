@@ -8,14 +8,17 @@ import { Feishu, formatNotice } from "./feishu.js";
 import { Official } from "./official.js";
 import { inWindow, backoff } from "./schedule.js";
 import { RemoteError } from "./http.js";
-import { acquire, atomicJson, sleep, log } from "./runtime.js";
+import { acquire, log } from "./runtime.js";
+import { HEARTBEAT_MS, StatusWriter, QueueSchedule, WakeSignal } from "./worker-control.js";
 export async function runService(root: string, c: Config) {
   validateCredentials(c);
   const release = await acquire(root);
   let store: Store | undefined;
   let running = true;
+  const wake = new WakeSignal();
   const stop = () => {
     running = false;
+    wake.signal();
   };
   process.on("SIGTERM", stop);
   process.on("SIGINT", stop);
@@ -30,6 +33,8 @@ export async function runService(root: string, c: Config) {
     notification: c.notification.mode,
     polling_interval_seconds: intervalMs / 1000,
     started_at: Date.now(),
+    runtime_optimization_version: 1,
+    heartbeat_interval_seconds: HEARTBEAT_MS / 1000,
     detector_state: "starting",
     last_observation_at: null,
   };
@@ -41,15 +46,19 @@ export async function runService(root: string, c: Config) {
     officialFailures = 0;
   let pollFatal = false,
     officialFatal = false;
-  const report = () => {
-    status.updated_at = Date.now();
+  let queue: QueueSchedule;
+  const writer = new StatusWriter(path.join(root, "var/status.json"));
+  const report = (force = false) => {
     status.next_poll_at = nextPoll || null;
-    status.pending = store?.counts();
-    atomicJson(path.join(root, "var/status.json"), status);
+    status.pending = queue?.counts;
+    status.queue_refreshes = queue?.refreshes ?? 0;
+    writer.report(status, force);
   };
   try {
     store = new Store(path.join(root, "var/state.sqlite"));
     const db = store;
+    queue = new QueueSchedule(db);
+    queue.refresh();
     const notify = new Feishu(c);
     report();
     while (running) {
@@ -66,7 +75,7 @@ export async function runService(root: string, c: Config) {
             status.last_error =
               e instanceof RemoteError ? e.message : "Official cleanup failed";
             report();
-            await sleep(1000);
+            await wake.wait(HEARTBEAT_MS);
             continue;
           }
         }
@@ -93,6 +102,7 @@ export async function runService(root: string, c: Config) {
                 needsCatchup,
                 c.notification.pending_ttl_minutes,
               );
+              queue.dirty ||= added;
               needsCatchup = false;
               status.last_observation_at = o.detectedAt;
               status.real_room_id = o.roomId;
@@ -148,10 +158,13 @@ export async function runService(root: string, c: Config) {
               official = new Official(c, snapshot.roomId, (o) => {
                 if (running && inWindow(c.schedule)) {
                   db.observe(o, false, c.notification.pending_ttl_minutes);
+                  queue.dirty = true;
+                  wake.signal();
                   status.last_observation_at = o.detectedAt;
                   status.live = o.live;
                 }
               });
+              official.onWake = () => wake.signal();
               await official.start();
               await official.waitReady();
               if (
@@ -160,6 +173,7 @@ export async function runService(root: string, c: Config) {
                 (status.last_observation_at ?? 0) <= snapshot.detectedAt
               ) {
                 db.observe(snapshot, true, c.notification.pending_ttl_minutes);
+                queue.dirty = true;
                 status.real_room_id = snapshot.roomId;
                 status.last_observation_at = snapshot.detectedAt;
                 status.live = snapshot.live;
@@ -197,7 +211,9 @@ export async function runService(root: string, c: Config) {
           }
         }
       }
-      const job = db.due();
+      queue.refresh();
+      const job = Date.now() >= queue.nextDue ? db.due() : undefined;
+      if (Date.now() >= queue.nextDue) queue.dirty = true;
       if (job && running) {
         try {
           await notify.send(
@@ -222,8 +238,15 @@ export async function runService(root: string, c: Config) {
           });
         }
       }
+      queue.refresh();
       report();
-      await sleep(1000);
+      const nowAfterWork = Date.now();
+      const windowBoundary = (Math.floor(nowAfterWork / 60_000) + 1) * 60_000;
+      const detectorDeadline = c.detector.mode === "polling"
+        ? (window && !pollFatal ? nextPoll : Infinity)
+        : (window && !officialFatal ? (official ? (status.detector_state === "session_cleanup_failed" ? nextOfficial : official.nextTickAt) : nextOfficial) : Infinity);
+      const deadline = Math.min(writer.lastWrite + HEARTBEAT_MS, queue.nextCheck, queue.nextDue, windowBoundary, detectorDeadline);
+      if (running) await wake.wait(Math.max(1, deadline - nowAfterWork));
     }
   } finally {
     if (official) {
@@ -235,7 +258,7 @@ export async function runService(root: string, c: Config) {
     }
     status.running = false;
     status.detector_state = "stopped";
-    report();
+    report(true);
     store?.close();
     process.off("SIGTERM", stop);
     process.off("SIGINT", stop);

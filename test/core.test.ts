@@ -1,3 +1,4 @@
+import { QueueSchedule, StatusWriter, WakeSignal } from "../src/worker-control.js";
 import {
   isApproved,
   rememberApproval,
@@ -557,4 +558,41 @@ test("minute polling converts units, preserves legacy seconds, and rejects ambig
   assert.equal(backoff(3, 60_000), 240_000);
   assert.equal(backoff(4, 60_000), 300_000);
   assert.equal(backoff(5, 600_000), 600_000, "failure cannot shorten a long interval");
+});
+
+
+test("idle status writes only on change or ten-second heartbeat", (t) => {
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),"monitor-status-"));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ let now=0;const writer=new StatusWriter(path.join(root,"status.json"),()=>now);
+ const state:any={running:true,detector_state:"outside_window"};
+ assert.ok(writer.report(state));
+ for(let i=1;i<10;i++){now=i*1000;assert.equal(writer.report(state),false)}
+ assert.equal(writer.writes,1);now=10000;assert.ok(writer.report(state));
+ now=10001;state.detector_state="healthy";assert.ok(writer.report(state));
+ assert.equal(writer.writes,3);state.running=false;assert.ok(writer.report(state,true));
+});
+
+test("idle queue caches scans and detects external retries through SQLite data_version", (t) => {
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),"monitor-queue-cache-"));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const db=new Store(path.join(root,"state.sqlite"));const external=new Store(path.join(root,"state.sqlite"));t.after(()=>{db.close();external.close()});
+ const q=new QueueSchedule(db);q.refresh(0);
+ for(let i=1;i<=20;i++)q.refresh(i*1000);
+ assert.equal(q.refreshes,1);assert.equal(q.nextDue,Infinity);
+ external.observe({roomId:1,live:true,title:"test",startTime:"2026-10-08T10:00:00.000Z",detectedAt:21000},false,1);
+ q.refresh(30000);assert.equal(q.refreshes,2);assert.equal(q.nextDue,21000);
+ const job=db.due(30000)!;db.failed(job,"fixed",false,30000);q.dirty=true;q.refresh(30000);assert.equal(q.nextDue,Infinity);
+ external.retryFailed(31000);q.refresh(40000);assert.equal(q.nextDue,31000);
+ db.db.prepare("UPDATE jobs SET next=200000 WHERE status='pending'").run();q.dirty=true;q.refresh(40001);assert.equal(q.nextDue,81000,"TTL wakes before retry deadline");
+});
+
+test("unchanged observations do not rewrite SQLite rows", (t) => {
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),"monitor-stable-"));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const db=new Store(path.join(root,"state.sqlite"));const observer=new Store(path.join(root,"state.sqlite"));t.after(()=>{db.close();observer.close()});
+ const o={roomId:1,live:true,title:"test",startTime:"2026-10-08T10:00:00.000Z",detectedAt:1000};db.observe(o,false,30);
+ const version=observer.dataVersion();assert.equal(db.observe({...o,title:"new",detectedAt:2000},false,30),false);assert.equal(observer.dataVersion(),version);
+});
+
+test("wake signal interrupts long idle wait and retains a signal before wait", async () => {
+ const wake=new WakeSignal();wake.signal();await wake.wait(60000);
+ const started=Date.now();const waiting=wake.wait(60000);setTimeout(()=>wake.signal(),10);await waiting;assert.ok(Date.now()-started<1000);
 });

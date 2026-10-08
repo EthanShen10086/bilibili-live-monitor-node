@@ -48,11 +48,10 @@ export class Store {
       const actualStart = o.live
         ? (o.startTime ?? (prev?.live ? prev.start : undefined))
         : undefined;
-      this.db
-        .prepare(
-          "INSERT OR REPLACE INTO observations(room,live,start,key) VALUES(?,?,?,?)",
-        )
-        .run(o.roomId, Number(o.live), actualStart ?? null, key ?? null);
+      if (!prev || prev.live !== Number(o.live) || prev.start !== (actualStart ?? null) || prev.key !== (key ?? null))
+        this.db.prepare("INSERT OR REPLACE INTO observations(room,live,start,key) VALUES(?,?,?,?)")
+          .run(o.roomId, Number(o.live), actualStart ?? null, key ?? null);
+      if (o.live && prev?.live && prev.key === key) return false;
       if (!o.live || !key) return false;
       const notice: Notice = {
         ...o,
@@ -109,6 +108,11 @@ export class Store {
         "UPDATE jobs SET status='pending',next=?,last_error=NULL WHERE status='failed' AND expires>?",
       )
       .run(now, now).changes;
+  }
+  dataVersion(): number { return this.db.pragma("data_version", { simple: true }) as number; }
+  nextWake(): number {
+    const row = this.db.prepare("SELECT MIN(next) AS next, MIN(expires) AS expires FROM jobs WHERE status='pending'").get() as { next: number | null; expires: number | null };
+    return Math.min(row.next ?? Infinity, row.expires ?? Infinity);
   }
   counts() {
     return this.db

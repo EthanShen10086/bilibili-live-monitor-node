@@ -243,3 +243,5 @@ PATH="$PWD/.runtime/node_modules/node/bin:$PATH" npm test
 发布见 [GitHub 发布](docs/PUBLISH.md)，拆分验证见 [验证记录](docs/VALIDATION.md)。
 
 轮询间隔设置：[分钟级配置和重启步骤](docs/POLLING_INTERVAL.md)。
+
+后台资源优化：[实现说明、Mac 与云端更新步骤](docs/RESOURCE_OPTIMIZATION.md)。保持每 1 分钟轮询。

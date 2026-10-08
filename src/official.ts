@@ -140,6 +140,7 @@ export class Official {
       try {
         if (m?.cmd === "LIVE_OPEN_PLATFORM_INTERACTION_END") {
           this.error = new RemoteError("Official", "session_ended");
+          this.onWake?.();
           return;
         }
         const o = officialObservation(m, this.roomId);
@@ -149,15 +150,18 @@ export class Official {
           e instanceof RemoteError
             ? e
             : new RemoteError("Official", "event_processing");
+        this.onWake?.();
       }
     });
     ws.on("error", () => {
       this.connected = false;
       this.error = new RemoteError("Official", "socket_error");
+      this.onWake?.();
     });
     ws.on("close", () => {
       this.connected = false;
       this.error ??= new RemoteError("Official", "socket_closed");
+      this.onWake?.();
     });
   }
   async waitReady(timeout = 12000) {
@@ -169,6 +173,8 @@ export class Official {
     if (!this.connected)
       throw new RemoteError("Official", "authentication_timeout");
   }
+  onWake?: () => void;
+  get nextTickAt() { return Math.min(this.lastGameHeartbeat + 20_000, this.lastHeartbeat + 45_001); }
   async tick() {
     if (this.error) throw this.error;
     if (Date.now() - this.lastHeartbeat > 45000)

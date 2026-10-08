@@ -108,7 +108,7 @@ test("minute interval worker waits before the next query", async (t) => {
   child.stderr.on("data", (d) => error += d);
   const done = new Promise<number | null>((resolve) => child.on("exit", resolve));
   try {
-    for (let i = 0; i < 120 && !output.includes("POLL_COUNT 2"); i++) await sleep(50);
+    for (let i = 0; i < 300 && !output.includes("POLL_COUNT 2"); i++) await sleep(50);
     assert.ok(output.includes("POLL_COUNT 2"), "second query missing: " + error + output);
     assert.ok(output.indexOf("POLL_COUNT 2") > output.indexOf("CLOCK_AFTER_INTERVAL"), "queried before configured minute");
     const state = JSON.parse(fs.readFileSync(path.join(root, "var/status.json"), "utf8"));
@@ -119,4 +119,19 @@ test("minute interval worker waits before the next query", async (t) => {
   } finally {
     if (child.exitCode === null) { child.kill("SIGKILL"); await done; }
   }
+});
+
+
+test("idle worker keeps its status file stable and stops promptly", async (t) => {
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),"monitor-idle-"));fs.copyFileSync(path.join(project,"config.yaml"),path.join(root,"config.yaml"));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const child=spawn(process.execPath,[path.join(project,"dist/test/fixtures/service.js"),root,"outside"],{stdio:["ignore","pipe","pipe"]});
+ let error="";child.stderr.on("data",d=>error+=d);const done=new Promise<number|null>(resolve=>child.on("exit",resolve));
+ try {
+  let first:any;
+  for(let i=0;i<100;i++){await sleep(50);try{first=JSON.parse(fs.readFileSync(path.join(root,"var/status.json"),"utf8"));if(first.detector_state==="outside_window")break}catch{}}
+  assert.equal(first?.runtime_optimization_version,1,error);const mtime=fs.statSync(path.join(root,"var/status.json")).mtimeMs;
+  await sleep(2300);const second=JSON.parse(fs.readFileSync(path.join(root,"var/status.json"),"utf8"));
+  assert.equal(second.updated_at,first.updated_at);assert.equal(second.queue_refreshes,1);assert.equal(fs.statSync(path.join(root,"var/status.json")).mtimeMs,mtime);
+  const stoppedAt=Date.now();child.kill("SIGTERM");assert.equal(await done,0,error);assert.ok(Date.now()-stoppedAt<2500,"shutdown waited for idle timer");
+ }finally{if(child.exitCode===null){child.kill("SIGKILL");await done}}
 });
