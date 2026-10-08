@@ -615,3 +615,16 @@ test("adaptive polling slows only for the current durably sent session", (t) => 
  db.observe(room(false, null, 3000), false, 30);
  assert.equal(db.pollingPhase(11163068), "awaiting_start");
 });
+
+test("HTTP streaming enforces decoded size and cancels error bodies", async () => {
+ let cancelled=0, pulled=0;
+ const stream=()=>new ReadableStream<Uint8Array>({pull(c){pulled++;c.enqueue(new Uint8Array(64*1024));},cancel(){cancelled++;}});
+ await assert.rejects(jsonRequest("https://example.com",{},1000,(async()=>new Response(stream())) as Fetch),/response_limit/);
+ assert.equal(cancelled,1);assert.ok(pulled<40,"reader did not stop at limit");
+ pulled=0;
+ await assert.rejects(jsonRequest("https://example.com",{},1000,(async()=>new Response(stream(),{status:429})) as Fetch),/429/);
+ assert.equal(cancelled,2);assert.ok(pulled<=1);
+ await assert.rejects(jsonRequest("https://example.com",{},1000,(async()=>new Response(stream(),{headers:{"content-length":"99999999"}})) as Fetch),/response_limit/);
+ assert.equal(cancelled,3);
+ assert.deepEqual(await jsonRequest("https://example.com",{},1000,(async()=>response({code:0})) as Fetch),{code:0});
+});
