@@ -165,3 +165,18 @@ test("declined boot confirmation stays idle and SIGTERM interrupts its wait", as
   const start=Date.now();child.kill("SIGTERM");assert.equal(await done,0,error);assert.ok(Date.now()-start<1500);
  }finally{if(child.exitCode===null){child.kill("SIGKILL");await done}}
 });
+
+test("managed output is captured and shutdown drains normally", async (t) => {
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),"monitor-managed-logs-"));fs.copyFileSync(path.join(project,"config.yaml"),path.join(root,"config.yaml"));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const child=spawn(process.execPath,[path.join(project,"dist/test/fixtures/service.js"),root,"managed-logs"],{stdio:["ignore","pipe","pipe"]});
+ let output="",error="";child.stdout.on("data",d=>output+=d);child.stderr.on("data",d=>error+=d);const done=new Promise<number|null>(resolve=>child.on("exit",resolve));
+ try {
+  let state:any;
+  for(let i=0;i<100;i++){await sleep(50);try{state=JSON.parse(fs.readFileSync(path.join(root,"var/status.json"),"utf8"));if(state.detector_state==="outside_window")break}catch{}}
+  assert.equal(state?.detector_state,"outside_window");
+  child.kill("SIGTERM");assert.equal(await done,0,error);
+  assert.equal(output,"");assert.equal(error,"");
+  assert.ok(fs.readFileSync(path.join(root,"var/service.log"),"utf8").includes("CAPTURED_STDOUT"));
+  assert.ok(fs.readFileSync(path.join(root,"var/error.log"),"utf8").includes("CAPTURED_STDERR"));
+ }finally{if(child.exitCode===null){child.kill("SIGKILL");await done}}
+});

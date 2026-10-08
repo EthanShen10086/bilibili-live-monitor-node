@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import lockfile from "proper-lockfile";
+import { appendBoundedLog, captureManagedLogs } from "./bounded-logs.js";
 export const sleep = (ms: number) =>
   new Promise<void>((r) => setTimeout(r, ms));
 export function atomicJson(file: string, value: unknown) {
@@ -39,6 +40,7 @@ let logFile: string | undefined;
 export function configureLogs(root: string) {
   fs.mkdirSync(path.join(root, "var"), { recursive: true, mode: 0o700 });
   logFile = path.join(root, "var/events.log");
+  captureManagedLogs(root);
 }
 export function log(event: string, details: Record<string, unknown> = {}) {
   const line = JSON.stringify({
@@ -50,12 +52,5 @@ export function log(event: string, details: Record<string, unknown> = {}) {
     console.log(line);
     return;
   }
-  if (fs.existsSync(logFile) && fs.statSync(logFile).size >= 2 * 1024 * 1024) {
-    for (let i = 2; i >= 1; i--) {
-      const old = logFile + "." + i;
-      if (fs.existsSync(old)) fs.renameSync(old, logFile + "." + (i + 1));
-    }
-    fs.renameSync(logFile, logFile + ".1");
-  }
-  fs.appendFileSync(logFile, line + "\n", { mode: 0o600 });
+  appendBoundedLog(logFile, line + "\n");
 }

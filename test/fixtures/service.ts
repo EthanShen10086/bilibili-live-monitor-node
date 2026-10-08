@@ -10,7 +10,9 @@ c.schedule = {
   start: "00:00",
   end: "24:00",
 };
-if (mode === "outside") c.schedule.weekdays = [];
+if (mode === "outside" || mode === "managed-logs") c.schedule.weekdays = [];
+import { configureLogs } from "../../src/runtime.js";
+if (mode === "managed-logs") { configureLogs(root); console.log("CAPTURED_STDOUT"); console.error("CAPTURED_STDERR"); }
 let sends = 0;
 if (mode === "minute") {
   let elapsed = 0;
