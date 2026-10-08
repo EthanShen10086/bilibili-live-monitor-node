@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { readConfig, validateCredentials, loadEnv } from "../src/config.js";
+import { readConfig, validateCredentials, loadEnv, pollingIntervalMs } from "../src/config.js";
 import { inWindow, backoff } from "../src/schedule.js";
 import { probeRoom, parseRoom, normalizeStart } from "../src/bilibili.js";
 import { Store } from "../src/store.js";
@@ -535,4 +535,26 @@ test("macOS boot identity uses both kernel seconds and microseconds", () => {
     "100:20",
   );
   assert.throws(() => parseBootIdentity("unavailable"), /Cannot determine/);
+});
+
+
+test("minute polling converts units, preserves legacy seconds, and rejects ambiguous configs", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "monitor-interval-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const original = fs.readFileSync(path.resolve(import.meta.dirname, "../../config.yaml"), "utf8");
+  const writeInterval = (lines: string) => fs.writeFileSync(path.join(root, "config.yaml"), original.replace(/^    interval_minutes:.*$/m, lines));
+  writeInterval("    interval_minutes: 1");
+  assert.equal(pollingIntervalMs(readConfig(root).detector.polling), 60_000);
+  writeInterval("    interval_minutes: 5");
+  assert.equal(pollingIntervalMs(readConfig(root).detector.polling), 300_000);
+  writeInterval("    interval_seconds: 10");
+  assert.equal(pollingIntervalMs(readConfig(root).detector.polling), 10_000);
+  for (const lines of ["", "    interval_minutes: 0", "    interval_minutes: 61", "    interval_minutes: 1.5", "    interval_minutes: 1\n    interval_seconds: 10"]) {
+    writeInterval(lines);
+    assert.throws(() => readConfig(root));
+  }
+  assert.equal(backoff(1, 60_000), 60_000);
+  assert.equal(backoff(3, 60_000), 240_000);
+  assert.equal(backoff(4, 60_000), 300_000);
+  assert.equal(backoff(5, 600_000), 600_000, "failure cannot shorten a long interval");
 });

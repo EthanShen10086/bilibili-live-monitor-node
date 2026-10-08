@@ -96,3 +96,27 @@ test("worker retries a transient Feishu failure and persists one successful deli
   );
   db.close();
 });
+
+
+test("minute interval worker waits before the next query", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "monitor-minute-worker-"));
+  fs.copyFileSync(path.join(project, "config.yaml"), path.join(root, "config.yaml"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const child = spawn(process.execPath, [path.join(project, "dist/test/fixtures/service.js"), root, "minute"], { stdio: ["ignore", "pipe", "pipe"] });
+  let output = "", error = "";
+  child.stdout.on("data", (d) => output += d);
+  child.stderr.on("data", (d) => error += d);
+  const done = new Promise<number | null>((resolve) => child.on("exit", resolve));
+  try {
+    for (let i = 0; i < 120 && !output.includes("POLL_COUNT 2"); i++) await sleep(50);
+    assert.ok(output.includes("POLL_COUNT 2"), "second query missing: " + error + output);
+    assert.ok(output.indexOf("POLL_COUNT 2") > output.indexOf("CLOCK_AFTER_INTERVAL"), "queried before configured minute");
+    const state = JSON.parse(fs.readFileSync(path.join(root, "var/status.json"), "utf8"));
+    assert.equal(state.polling_interval_seconds, 60);
+    assert.ok(state.next_poll_at - state.last_observation_at >= 60_000);
+    child.kill("SIGTERM");
+    assert.equal(await done, 0, error);
+  } finally {
+    if (child.exitCode === null) { child.kill("SIGKILL"); await done; }
+  }
+});

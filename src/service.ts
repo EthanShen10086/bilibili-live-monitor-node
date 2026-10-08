@@ -1,7 +1,7 @@
 import path from "node:path";
 import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
-import { type Config, validateCredentials } from "./config.js";
+import { type Config, validateCredentials, pollingIntervalMs } from "./config.js";
 import { probeRoom } from "./bilibili.js";
 import { Store } from "./store.js";
 import { Feishu, formatNotice } from "./feishu.js";
@@ -20,6 +20,7 @@ export async function runService(root: string, c: Config) {
   process.on("SIGTERM", stop);
   process.on("SIGINT", stop);
   let official: Official | undefined;
+  const intervalMs = pollingIntervalMs(c.detector.polling);
   const status: any = {
     pid: process.pid,
     host: hostname(),
@@ -27,6 +28,7 @@ export async function runService(root: string, c: Config) {
     running: true,
     mode: c.detector.mode,
     notification: c.notification.mode,
+    polling_interval_seconds: intervalMs / 1000,
     started_at: Date.now(),
     detector_state: "starting",
     last_observation_at: null,
@@ -41,6 +43,7 @@ export async function runService(root: string, c: Config) {
     officialFatal = false;
   const report = () => {
     status.updated_at = Date.now();
+    status.next_poll_at = nextPoll || null;
     status.pending = store?.counts();
     atomicJson(path.join(root, "var/status.json"), status);
   };
@@ -103,7 +106,7 @@ export async function runService(root: string, c: Config) {
             failures = 0;
             status.detector_state = "healthy";
             delete status.last_error;
-            nextPoll = Date.now() + c.detector.polling.interval_seconds * 1000;
+            nextPoll = Date.now() + intervalMs;
           } catch (e) {
             failures++;
             pollFatal = e instanceof RemoteError && !e.retryable;
@@ -112,7 +115,7 @@ export async function runService(root: string, c: Config) {
               e instanceof RemoteError ? e.message : "Room probe failed";
             nextPoll =
               Date.now() +
-              backoff(failures, c.detector.polling.interval_seconds * 1000);
+              backoff(failures, intervalMs);
             log("detector_error", {
               code: status.last_error,
               retry_at: nextPoll,

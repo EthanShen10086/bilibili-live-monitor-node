@@ -14,5 +14,5 @@ export function inWindow(c: Config["schedule"], date = new Date()): boolean {
   return c.weekdays.includes(day) && t >= c.start && t < c.end;
 }
 export function backoff(attempt: number, base = 10_000) {
-  return Math.min(300_000, base * 2 ** Math.min(Math.max(0, attempt - 1), 10));
+  return Math.min(Math.max(300_000, base), base * 2 ** Math.min(Math.max(0, attempt - 1), 10));
 }

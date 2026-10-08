@@ -9,9 +9,13 @@ const schema = z.object({
   detector: z.object({
     mode: z.enum(["polling", "official"]),
     polling: z.object({
-      interval_seconds: z.number().min(10).max(3600),
+      interval_minutes: z.number().int().min(1).max(60).optional(),
+      interval_seconds: z.number().min(10).max(3600).optional(),
       timeout_seconds: z.number().min(1).max(60),
-    }),
+    }).refine(
+      (p) => (p.interval_minutes === undefined) !== (p.interval_seconds === undefined),
+      "Configure exactly one of interval_minutes or legacy interval_seconds",
+    ),
     official: z.object({
       app_id_env: envName,
       access_key_id_env: envName,
@@ -111,4 +115,13 @@ export function loadEnv(root: string) {
       throw new Error("Restrict .env permissions: chmod 600 .env");
     process.loadEnvFile(p);
   }
+}
+
+// Retain legacy seconds configs; minute-based settings are preferred.
+export function pollingIntervalMs(p: Config["detector"]["polling"]): number {
+  if (p.interval_minutes !== undefined && p.interval_seconds === undefined)
+    return p.interval_minutes * 60_000;
+  if (p.interval_seconds !== undefined && p.interval_minutes === undefined)
+    return p.interval_seconds * 1_000;
+  throw new Error("Configure exactly one polling interval unit");
 }

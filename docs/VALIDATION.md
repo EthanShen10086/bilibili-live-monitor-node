@@ -10,3 +10,7 @@ PATH="$PWD/.runtime/node_modules/node/bin:$PATH" npm test
 ```
 
 真实消息、跨重启确认、崩溃恢复、云端 SSH 和手机提醒需按 Mac/云端手册独立验收。上传排除 node_modules、.runtime、缓存、dist、.env、var、日志和截图，保留源码、空值示例和锁文件。
+
+## 2026-10-08 分钟级轮询更新
+
+默认 interval_minutes: 1，旧秒配置仍支持且单位互斥。新增分钟转换、非法配置与长间隔退避测试；新增真实 worker 调度测试。当前 36 项测试通过、1 项真实联网测试跳过。 不把单元测试当作真实开播、手机提醒或云端重启的验收。详见 POLLING_INTERVAL.md。
