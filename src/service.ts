@@ -40,6 +40,8 @@ export async function runService(root: string, c: Config) {
     adaptive_polling_version: 1,
     started_at: Date.now(),
     runtime_optimization_version: 1,
+    resource_safety_version: 1,
+    history_retention_days: c.maintenance.history_retention_days,
     heartbeat_interval_seconds: HEARTBEAT_MS / 1000,
     detector_state: "starting",
     last_observation_at: null,
@@ -63,6 +65,7 @@ export async function runService(root: string, c: Config) {
   try {
     store = new Store(path.join(root, "var/state.sqlite"));
     const db = store;
+    let nextCleanup = db.nextCleanupAt(c.maintenance.history_retention_days);
     queue = new QueueSchedule(db);
     queue.refresh();
     const notify = new Feishu(c);
@@ -232,6 +235,12 @@ export async function runService(root: string, c: Config) {
           }
         }
       }
+      if (Date.now() >= nextCleanup) {
+        const removed = db.cleanupHistory(c.maintenance.history_retention_days);
+        queue.dirty ||= removed > 0;
+        nextCleanup = db.nextCleanupAt(c.maintenance.history_retention_days);
+        if (removed) log("history_cleaned", { removed });
+      }
       queue.refresh();
       const job = Date.now() >= queue.nextDue ? db.due() : undefined;
       if (Date.now() >= queue.nextDue) queue.dirty = true;
@@ -267,7 +276,7 @@ export async function runService(root: string, c: Config) {
       const detectorDeadline = c.detector.mode === "polling"
         ? (window && !pollFatal ? nextPoll : Infinity)
         : (window && !officialFatal ? (official ? (status.detector_state === "session_cleanup_failed" ? nextOfficial : official.nextTickAt) : nextOfficial) : Infinity);
-      const deadline = Math.min(writer.lastWrite + HEARTBEAT_MS, queue.nextCheck, queue.nextDue, windowBoundary, detectorDeadline);
+      const deadline = Math.min(writer.lastWrite + HEARTBEAT_MS, queue.nextCheck, queue.nextDue, nextCleanup, windowBoundary, detectorDeadline);
       if (running) await wake.wait(Math.max(1, deadline - nowAfterWork));
     }
   } finally {

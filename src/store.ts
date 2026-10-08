@@ -23,6 +23,7 @@ export class Store {
     this.db.pragma("journal_mode = DELETE");
     this.db.exec(`
     CREATE TABLE IF NOT EXISTS observations (room INTEGER PRIMARY KEY, live INTEGER NOT NULL, start TEXT, key TEXT);
+    CREATE TABLE IF NOT EXISTS maintenance(id INTEGER PRIMARY KEY,last_cleanup INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS jobs (key TEXT PRIMARY KEY,payload TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,next INTEGER NOT NULL,expires INTEGER NOT NULL,last_error TEXT);
   `);
   }
@@ -123,6 +124,24 @@ export class Store {
     return this.db
       .prepare("SELECT status, count(*) AS count FROM jobs GROUP BY status")
       .all();
+  }
+  nextCleanupAt(retentionDays: number, now = Date.now()): number {
+    if (!retentionDays) return Infinity;
+    const row = this.db.prepare("SELECT last_cleanup FROM maintenance WHERE id=1").get() as {last_cleanup:number} | undefined;
+    return row ? Math.min(now + 86_400_000, row.last_cleanup + 86_400_000) : now;
+  }
+  cleanupHistory(retentionDays: number, now = Date.now()): number {
+    if (!retentionDays) return 0;
+    return this.db.transaction(() => {
+      const row = this.db.prepare("SELECT last_cleanup FROM maintenance WHERE id=1").get() as {last_cleanup:number} | undefined;
+      if (row && now >= row.last_cleanup && now - row.last_cleanup < 86_400_000) return 0;
+      const removed = this.db.prepare(`DELETE FROM jobs WHERE key IN (
+        SELECT key FROM jobs WHERE status IN ('sent','failed','expired') AND expires<?
+        AND key NOT IN (SELECT key FROM observations WHERE key IS NOT NULL)
+        ORDER BY expires,key LIMIT 200)`).run(now - retentionDays * 86_400_000).changes;
+      this.db.prepare("INSERT OR REPLACE INTO maintenance(id,last_cleanup) VALUES(1,?)").run(now);
+      return removed;
+    })();
   }
   close() {
     this.db.close();

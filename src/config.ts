@@ -56,6 +56,7 @@ const schema = z.object({
       receive_id_env: envName,
     }),
   }),
+  maintenance: z.object({ history_retention_days: z.number().int().min(0).max(3650).default(90) }).default({ history_retention_days: 90 }),
   deployment: z.object({
     active: z.enum(["local", "cloud"]),
     local: z
