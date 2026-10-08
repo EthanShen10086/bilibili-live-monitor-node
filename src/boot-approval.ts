@@ -3,7 +3,8 @@ import path from "node:path";
 import os from "node:os";
 import { execFile, execFileSync } from "node:child_process";
 import type { Config } from "./config.js";
-import { acquire, atomicJson, sleep, log } from "./runtime.js";
+import { acquire, atomicJson, log } from "./runtime.js";
+import { HEARTBEAT_MS, StatusWriter, WakeSignal } from "./worker-control.js";
 export interface Approval {
   boot_id: string;
   decision: "approved" | "declined";
@@ -59,20 +60,24 @@ export function rememberApproval(
 export async function awaitBootApproval(
   root: string,
   c: Config,
+  getBoot = currentBoot,
 ): Promise<boolean> {
-  const boot = currentBoot();
+  const boot = getBoot();
   if (isApproved(readApproval(root), boot)) return true;
   const release = await acquire(root, "boot-confirmation");
   let running = true;
+  const wake = new WakeSignal();
+  const writer = new StatusWriter(path.join(root, "var/status.json"));
   let dialog: ReturnType<typeof execFile> | undefined;
   const stop = () => {
     running = false;
+    wake.signal();
     dialog?.kill("SIGTERM");
   };
   process.on("SIGTERM", stop);
   process.on("SIGINT", stop);
   const report = (state: string) =>
-    atomicJson(path.join(root, "var/status.json"), {
+    writer.report({
       pid: process.pid,
       host: os.hostname(),
       running,
@@ -87,7 +92,9 @@ export async function awaitBootApproval(
     report("waiting_confirmation");
     // A decline (or GUI failure) is remembered for this boot to prevent repeated prompts.
     if (readApproval(root)?.boot_id !== boot) {
-      const approved = await new Promise<boolean>((resolve) => {
+      const heartbeat = setInterval(() => report("waiting_confirmation"), HEARTBEAT_MS);
+      let approved: boolean;
+      try { approved = await new Promise<boolean>((resolve) => {
         const script =
           'return button returned of (display dialog "是否启用本次电脑启动期间的 B 站开播订阅？\\n确认后同次启动期间登录自启动、崩溃自恢复；下次电脑重启重新确认。" with title "B 站开播订阅" buttons {"暂不启用", "启用"} default button "暂不启用")';
         dialog = execFile(
@@ -96,7 +103,7 @@ export async function awaitBootApproval(
           { timeout: 120000 },
           (error, stdout) => resolve(!error && stdout.trim() === "启用"),
         );
-      });
+      }); } finally { clearInterval(heartbeat); }
       if (running && !isApproved(readApproval(root), boot)) {
         rememberApproval(root, boot, approved);
         log(approved ? "boot_approved" : "boot_waiting_confirmation");
@@ -105,7 +112,7 @@ export async function awaitBootApproval(
     while (running) {
       if (isApproved(readApproval(root), boot)) return true;
       report("waiting_confirmation");
-      await sleep(1000);
+      await wake.wait(HEARTBEAT_MS);
     }
     report("stopped");
     return false;

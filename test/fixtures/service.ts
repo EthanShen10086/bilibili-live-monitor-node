@@ -3,6 +3,7 @@ import { readConfig } from "../../src/config.js";
 const root = process.argv[2];
 const mode = process.argv[3];
 const c = readConfig(root);
+import { awaitBootApproval, rememberApproval } from "../../src/boot-approval.js";
 c.schedule = {
   timezone: "Asia/Shanghai",
   weekdays: [1, 2, 3, 4, 5, 6, 7],
@@ -49,4 +50,7 @@ globalThis.fetch = (async (url: any) => {
     return new Response("retry", { status: 503 });
   return new Response(JSON.stringify({ code: 0 }));
 }) as typeof fetch;
-await runService(root, c);
+if (mode === "approval-wait") {
+ rememberApproval(root, "test-boot", false);
+ await awaitBootApproval(root, c, () => "test-boot");
+} else await runService(root, c);
