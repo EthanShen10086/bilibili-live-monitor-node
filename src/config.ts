@@ -11,6 +11,7 @@ const schema = z.object({
     polling: z.object({
       interval_minutes: z.number().int().min(1).max(60).optional(),
       interval_seconds: z.number().min(10).max(3600).optional(),
+      notified_live_interval_minutes: z.number().int().min(1).max(60).default(5),
       timeout_seconds: z.number().min(1).max(60),
     }).refine(
       (p) => (p.interval_minutes === undefined) !== (p.interval_seconds === undefined),
@@ -124,4 +125,8 @@ export function pollingIntervalMs(p: Config["detector"]["polling"]): number {
   if (p.interval_seconds !== undefined && p.interval_minutes === undefined)
     return p.interval_seconds * 1_000;
   throw new Error("Configure exactly one polling interval unit");
+}
+
+export function notifiedLiveIntervalMs(p: Config["detector"]["polling"]): number {
+  return Math.max(pollingIntervalMs(p), (p.notified_live_interval_minutes ?? 5) * 60_000);
 }

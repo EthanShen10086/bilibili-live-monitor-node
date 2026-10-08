@@ -1,7 +1,7 @@
 import path from "node:path";
 import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
-import { type Config, validateCredentials, pollingIntervalMs } from "./config.js";
+import { type Config, validateCredentials, pollingIntervalMs, notifiedLiveIntervalMs } from "./config.js";
 import { probeRoom } from "./bilibili.js";
 import { Store } from "./store.js";
 import { Feishu, formatNotice } from "./feishu.js";
@@ -24,6 +24,8 @@ export async function runService(root: string, c: Config) {
   process.on("SIGINT", stop);
   let official: Official | undefined;
   const intervalMs = pollingIntervalMs(c.detector.polling);
+  let currentIntervalMs = intervalMs;
+  let currentRoomId: number | undefined;
   const status: any = {
     pid: process.pid,
     host: hostname(),
@@ -32,6 +34,10 @@ export async function runService(root: string, c: Config) {
     mode: c.detector.mode,
     notification: c.notification.mode,
     polling_interval_seconds: intervalMs / 1000,
+    effective_polling_interval_seconds: intervalMs / 1000,
+    notified_live_interval_seconds: notifiedLiveIntervalMs(c.detector.polling) / 1000,
+    polling_phase: c.detector.mode === "polling" ? "awaiting_start" : "official",
+    adaptive_polling_version: 1,
     started_at: Date.now(),
     runtime_optimization_version: 1,
     heartbeat_interval_seconds: HEARTBEAT_MS / 1000,
@@ -60,6 +66,15 @@ export async function runService(root: string, c: Config) {
     queue = new QueueSchedule(db);
     queue.refresh();
     const notify = new Feishu(c);
+    const updateCadence = () => {
+      if (c.detector.mode !== "polling" || currentRoomId === undefined || !inWindow(c.schedule)) return false;
+      status.polling_phase = db.pollingPhase(currentRoomId);
+      const delay = status.polling_phase === "notified_live" ? notifiedLiveIntervalMs(c.detector.polling) : intervalMs;
+      const changed = delay !== currentIntervalMs;
+      currentIntervalMs = delay;
+      status.effective_polling_interval_seconds = delay / 1000;
+      return changed;
+    };
     report();
     while (running) {
       const now = Date.now();
@@ -80,6 +95,7 @@ export async function runService(root: string, c: Config) {
           }
         }
         status.detector_state = "outside_window";
+        status.polling_phase = "outside_window";
         wasInWindow = false;
         needsCatchup = true;
         nextPoll = 0;
@@ -87,6 +103,9 @@ export async function runService(root: string, c: Config) {
         if (!wasInWindow) {
           needsCatchup = true;
           nextPoll = 0;
+          currentIntervalMs = intervalMs;
+          status.polling_phase = "awaiting_start";
+          status.effective_polling_interval_seconds = intervalMs / 1000;
         }
         wasInWindow = true;
         if (!pollFatal && now >= nextPoll) {
@@ -106,6 +125,8 @@ export async function runService(root: string, c: Config) {
               needsCatchup = false;
               status.last_observation_at = o.detectedAt;
               status.real_room_id = o.roomId;
+              currentRoomId = o.roomId;
+              updateCadence();
               status.live = o.live;
               if (added)
                 log("notice_queued", {
@@ -116,7 +137,7 @@ export async function runService(root: string, c: Config) {
             failures = 0;
             status.detector_state = "healthy";
             delete status.last_error;
-            nextPoll = Date.now() + intervalMs;
+            nextPoll = Date.now() + currentIntervalMs;
           } catch (e) {
             failures++;
             pollFatal = e instanceof RemoteError && !e.retryable;
@@ -125,7 +146,7 @@ export async function runService(root: string, c: Config) {
               e instanceof RemoteError ? e.message : "Room probe failed";
             nextPoll =
               Date.now() +
-              backoff(failures, intervalMs);
+              backoff(failures, currentIntervalMs);
             log("detector_error", {
               code: status.last_error,
               retry_at: nextPoll,
@@ -221,6 +242,7 @@ export async function runService(root: string, c: Config) {
             job.key,
           );
           db.sent(job.key);
+          if (updateCadence() && window) nextPoll = Date.now() + currentIntervalMs;
           status.last_sent_at = Date.now();
           delete status.notification_error;
           log("notification_sent", { key: job.key });

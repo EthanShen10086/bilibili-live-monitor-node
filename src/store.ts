@@ -73,6 +73,11 @@ export class Store {
       );
     })();
   }
+  pollingPhase(roomId: number): "awaiting_start" | "awaiting_notification" | "notified_live" {
+    const row = this.db.prepare("SELECT o.live,j.status FROM observations o LEFT JOIN jobs j ON o.key=j.key WHERE o.room=?").get(roomId) as { live: number; status: string | null } | undefined;
+    if (!row?.live) return "awaiting_start";
+    return row.status === "sent" ? "notified_live" : "awaiting_notification";
+  }
   due(now = Date.now()): Job | undefined {
     this.db
       .prepare(

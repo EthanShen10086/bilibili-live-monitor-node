@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { readConfig, validateCredentials, loadEnv, pollingIntervalMs } from "../src/config.js";
+import { readConfig, validateCredentials, loadEnv, pollingIntervalMs, notifiedLiveIntervalMs } from "../src/config.js";
 import { inWindow, backoff } from "../src/schedule.js";
 import { probeRoom, parseRoom, normalizeStart } from "../src/bilibili.js";
 import { Store } from "../src/store.js";
@@ -595,4 +595,23 @@ test("unchanged observations do not rewrite SQLite rows", (t) => {
 test("wake signal interrupts long idle wait and retains a signal before wait", async () => {
  const wake=new WakeSignal();wake.signal();await wake.wait(60000);
  const started=Date.now();const waiting=wake.wait(60000);setTimeout(()=>wake.signal(),10);await waiting;assert.ok(Date.now()-started<1000);
+});
+
+test("adaptive polling slows only for the current durably sent session", (t) => {
+ const db = database(t), c = config();
+ assert.equal(notifiedLiveIntervalMs(c.detector.polling), 300_000);
+ c.detector.polling.interval_minutes = 10;
+ assert.equal(notifiedLiveIntervalMs(c.detector.polling), 600_000);
+ assert.equal(db.pollingPhase(11163068), "awaiting_start");
+ db.observe(room(), true, 30);
+ assert.equal(db.pollingPhase(11163068), "awaiting_notification");
+ const job = db.due(1001)!;
+ db.failed(job, "fail", false, 1002);
+ assert.equal(db.pollingPhase(11163068), "awaiting_notification");
+ db.sent(job.key);
+ assert.equal(db.pollingPhase(11163068), "notified_live");
+ db.observe(room(true, "2026-10-04T13:00:00.000Z", 2000), false, 30);
+ assert.equal(db.pollingPhase(11163068), "awaiting_notification");
+ db.observe(room(false, null, 3000), false, 30);
+ assert.equal(db.pollingPhase(11163068), "awaiting_start");
 });

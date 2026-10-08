@@ -36,7 +36,7 @@ globalThis.fetch = (async (url: any) => {
         data: {
           room_id: 11163068,
           short_id: 1616,
-          live_status: mode === "offline" ? 0 : 1,
+          live_status: (mode === "offline" || mode === "minute") ? 0 : 1,
           title: "集成测试",
           live_time:
             mode === "next" ? "2026-10-04 21:00:00" : "2026-10-04 20:00:00",

@@ -20,12 +20,16 @@ async function runOnce(root: string, mode: string) {
   const done = new Promise<number | null>((r) => child.on("exit", r));
   try {
     let observed = false;
+    let retryState: any;
     for (let i = 0; i < 200; i++) {
       await sleep(50);
       try {
         const s = JSON.parse(
           fs.readFileSync(path.join(root, "var/status.json"), "utf8"),
         );
+        if (mode === "retry" && s.pid === child.pid && s.notification_error) {
+          if (!s.last_sent_at) retryState = s;
+        }
         if (
           s.pid === child.pid &&
           (mode === "outside"
@@ -40,6 +44,19 @@ async function runOnce(root: string, mode: string) {
       } catch {}
     }
     assert.ok(observed, "service did not become ready: " + err);
+    const state = JSON.parse(fs.readFileSync(path.join(root, "var/status.json"), "utf8"));
+    if (mode === "retry") {
+      assert.equal(retryState?.polling_phase, "awaiting_notification");
+      assert.equal(retryState?.effective_polling_interval_seconds, 60);
+    }
+    if (["live", "next", "retry"].includes(mode)) {
+      assert.equal(state.polling_phase, "notified_live");
+      assert.equal(state.effective_polling_interval_seconds, 300);
+      assert.ok(state.next_poll_at - state.last_observation_at >= 300_000);
+    } else if (mode === "offline") {
+      assert.equal(state.polling_phase, "awaiting_start");
+      assert.equal(state.effective_polling_interval_seconds, 60);
+    }
     child.kill("SIGTERM");
     assert.equal(await done, 0, err);
     return out;
