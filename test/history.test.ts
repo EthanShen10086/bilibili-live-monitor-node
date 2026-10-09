@@ -31,3 +31,15 @@ test("legacy database upgrades preserve an already sent current session", (t) =>
  INSERT INTO jobs(key,payload,status,next,expires) VALUES('legacy','{}','sent',0,0);`);legacy.close();
  const upgraded=new Store(file);try{assert.equal(upgraded.cleanupHistory(90,100*86_400_000),0);assert.equal(upgraded.pollingPhase(1),"notified_live");}finally{upgraded.close()}
 });
+
+test("pending indexes bound queue scans and preserve migration and expiry semantics", (t) => {
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),"monitor-index-"));const file=path.join(dir,"state.sqlite");const db=new Store(file);t.after(()=>{db.close();fs.rmSync(dir,{recursive:true,force:true})});
+ const insert=db.db.prepare("INSERT INTO jobs(key,payload,status,next,expires) VALUES(?,'{}',?,?,?)");
+ db.db.transaction(()=>{for(let i=0;i<2000;i++)insert.run("sent"+i,"sent",0,0);insert.run("due","pending",10,100);insert.run("expired","pending",0,5);insert.run("future","pending",200,300);})();
+ const plan=(sql:string)=>db.db.prepare("EXPLAIN QUERY PLAN "+sql).all().map((r:any)=>r.detail).join(" ");
+ assert.match(plan("SELECT key FROM jobs WHERE status='pending' AND next<=20 ORDER BY next LIMIT 1"),/jobs_pending_next/);
+ assert.match(plan("UPDATE jobs SET status='expired' WHERE status='pending' AND expires<=20"),/jobs_pending_expires/);
+ assert.equal(db.due(20)?.key,"due");db.sent("due");assert.equal(db.nextWake(),200);
+ assert.equal((db.db.prepare("SELECT status FROM jobs WHERE key='expired'").get() as any).status,"expired");
+ const reopened=new Store(file);reopened.close();assert.equal((db.db.prepare("SELECT count(*) AS n FROM jobs").get() as any).n,2003);
+});
